@@ -13,7 +13,7 @@ export const STRIPE = {
   qcOnce: "https://buy.stripe.com/3cI7sEgyych41Lo54xdQQ0e",
   qcMonthly: "https://buy.stripe.com/aFacMYfuubd04XAcwZdQQ0a",
   driftOnce: "https://buy.stripe.com/dRmfZa9661Cqeya8gJdQQ0f",
-  driftMonthly: "https://buy.stripe.com/5kQ4gs6XYgxkeya7cFdQQ0h".replace("gxkeya", "eiepc"),
+  driftMonthly: "https://buy.stripe.com/5kQ4gs6XYch489M54xdQQ0b",
   accessOnce: "https://buy.stripe.com/fZu6oAcii0ym2PsbsVdQQ0g",
   accessMonthly: "https://buy.stripe.com/fZu9AM1DE4OCblYbsVdQQ0c",
   packOnce: "https://buy.stripe.com/00wdR2822gxkeya7cFdQQ0h",
