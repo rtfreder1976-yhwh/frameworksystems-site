@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { EMAIL, STRIPE } from "@/lib/site";
+import { INVOICEFLAG_EMAIL, INVOICEFLAG_EMAIL_LABEL, STRIPE } from "@/lib/site";
 
 export const Route = createFileRoute("/shipping")({
   head: () => ({
@@ -29,7 +29,7 @@ export function Shipping() {
               the phone system.
             </p>
             <div className="cta-row">
-              <a href={`${EMAIL}?subject=InvoiceFlag%20first%20audit`} className="button button-primary">
+              <a href={`${INVOICEFLAG_EMAIL}?subject=InvoiceFlag%20first%20audit`} className="button button-primary">
                 Email for free audit
               </a>
               <a href="#pricing" className="button button-secondary">
@@ -84,7 +84,7 @@ export function Shipping() {
               <h3 className="pricing-title">Free</h3>
               <p className="pricing-copy">Send one invoice. If nothing’s off, you owe nothing.</p>
               <p style={{ marginTop: 16 }}>
-                <a href={`${EMAIL}?subject=InvoiceFlag%20first%20audit`} className="button button-primary">
+                <a href={`${INVOICEFLAG_EMAIL}?subject=InvoiceFlag%20first%20audit`} className="button button-primary">
                   Email for free audit
                 </a>
               </p>
@@ -147,11 +147,11 @@ export function Shipping() {
             <span className="section-label">Primary next step</span>
             <h2 className="cta-title">Send last month’s invoice.</h2>
             <p className="cta-copy">
-              Email the PDF or CSV to todd@frameworksystems.co. Subject: InvoiceFlag first audit. If
+              Email the PDF or CSV to {INVOICEFLAG_EMAIL_LABEL}. Subject: InvoiceFlag first audit. If
               nothing’s off, you owe nothing.
             </p>
             <div className="cta-row">
-              <a href={`${EMAIL}?subject=InvoiceFlag%20first%20audit`} className="button button-primary">
+              <a href={`${INVOICEFLAG_EMAIL}?subject=InvoiceFlag%20first%20audit`} className="button button-primary">
                 Email the invoice
               </a>
               <Link to="/" className="button button-secondary">
