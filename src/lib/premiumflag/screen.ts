@@ -5,7 +5,7 @@
  * payroll register (check-level detail) sent in place of a payroll summary.
  */
 
-export type ScreenReason = "ssn" | "register";
+export type ScreenReason = "ssn" | "register" | "scanned";
 export type ScreenVerdict = { ok: true } | { ok: false; reason: ScreenReason; message: string };
 
 export const SSN_MESSAGE =
@@ -90,7 +90,7 @@ export function detectDelimiter(firstLine: string): string {
 
 /** Small RFC 4180 reader: quotes, doubled quotes, CRLF, any single-character delimiter. */
 export function parseCsv(input: string, delimiter?: string): string[][] {
-  const text = input.replace(/^/, "");
+  const text = input.replace(/^\uFEFF/, "");
   const firstLine = text.split(/\r?\n/, 1)[0] ?? "";
   const delim = delimiter ?? detectDelimiter(firstLine);
   const rows: string[][] = [];
@@ -159,6 +159,45 @@ export function screenCsv(text: string): ScreenVerdict {
     return { ok: false, reason: "register", message: REGISTER_MESSAGE };
   }
   return { ok: true };
+}
+
+export const UNREADABLE_SUMMARY_MESSAGE =
+  "That PDF could not be opened to check it for Social Security numbers. Export the payroll summary again, as a CSV or as a PDF with text.";
+
+function scannedSummaryMessage(pages: number[]): string {
+  const which =
+    pages.length === 1
+      ? `Page ${pages[0]} has no text to check for Social Security numbers, so it looks scanned.`
+      : `Pages ${pages.join(", ")} have no text to check for Social Security numbers, so they look scanned.`;
+  return `${which} Export the payroll summary from your payroll system as a CSV, or as a PDF with text.`;
+}
+
+/** Pages with (almost) no text of their own: a scan, or a picture of a page. */
+export function pagesWithoutText(pageTexts: string[]): number[] {
+  return pageTexts.flatMap((t, i) => (t.replace(/\s+/g, "").length < 20 ? [i + 1] : []));
+}
+
+/**
+ * Screen a PDF by its text layer, page by page. The payroll summary is where registers and
+ * Social Security numbers turn up, so every page of it has to be checkable before it is read:
+ * a scanned page, or a file that won't open, is refused. A scanned bill or certificate goes on
+ * to the reader, whose own contains_ssn check refuses it after the read.
+ */
+export function screenPdf(
+  pageTexts: string[] | null,
+  kind: "bill" | "summary" | "certificate",
+): ScreenVerdict {
+  if (kind === "summary") {
+    if (pageTexts == null) {
+      return { ok: false, reason: "scanned", message: UNREADABLE_SUMMARY_MESSAGE };
+    }
+    const blank = pagesWithoutText(pageTexts);
+    if (blank.length) {
+      return { ok: false, reason: "scanned", message: scannedSummaryMessage(blank) };
+    }
+  }
+  if (pageTexts == null) return { ok: true };
+  return screenText(pageTexts.join("\n"), kind);
 }
 
 /** Screen a PDF's text layer. The register test only applies to the payroll summary slot. */

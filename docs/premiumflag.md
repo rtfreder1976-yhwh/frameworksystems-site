@@ -94,9 +94,9 @@ The carrier sends two. PremiumFlag reads only the second.
 Three files. No login. No payroll-system connection. No Social Security numbers.
 
 1. **The audit bill or worksheet.** PDF. Up to 60 pages, 3 MB.
-2. **Payroll summary.** CSV or PDF. Columns that matter: person or role, state, class code,
+2. **Payroll summary.** A CSV, or a PDF with text on every page. Not a scan. Columns that matter: person or role, state, class code,
    straight-time wages, overtime wages, overtime premium. Not a register.
-3. **Workers comp (or GL) certificates for subs.** PDFs, or one zip of PDFs (unpacked in the
+3. **Workers comp (or GL) certificates for subs.** Up to 60 PDFs, or a zip of PDFs (up to 50 MB; each entry is counted and size-checked before it is inflated, unpacked in the
    browser). Each certificate needs the insured name, the coverage line, a policy number, and
    effective and expiration dates. Required whenever the bill counts subcontractors.
 
@@ -115,8 +115,19 @@ After the read, the reader's own flags are honored the same way: `contains_ssn` 
 in any slot, `document_type: payroll_register` or `looks_like_register` refuses the summary, and a
 file that is not a bill, not a summary, or not a certificate is sent back with a plain message.
 
+- **A payroll summary that can't be checked.** Every page of a summary PDF needs text of its own.
+  A scanned page, or a PDF that won't open, is refused before anything reads it, because a scan
+  could hide a register full of Social Security numbers. Export the summary as a CSV or a PDF
+  with text. A scanned bill or certificate is allowed: the screen sees no text there, so the
+  reader's own `contains_ssn` check is what refuses it, after the read.
+
 If the summary is missing, or the bill counts subs and there are no certificates, the compare step
 stops and says exactly what is missing. It does not guess a dispute.
+
+The payroll summary has to cover the audit period. Its dates must sit within a month of the
+bill's at each end. A summary for other dates, such as last year's or a calendar year against a
+mid-year policy, stops the compare and asks for the right one. A summary with no dates (most
+CSVs) is assumed to cover the audit period, and the result says so.
 
 ## What it returns
 
@@ -133,15 +144,16 @@ line only through these six rules. Each flag names the proof: which uploaded fil
 
 | Rule | Flags when | Our figure |
 | --- | --- | --- |
-| `sub_has_wc_cert` | On a workers comp audit, a sub was billed as payroll or cost, and a certificate in the upload shows workers comp in force for that sub across the audit period | $0 (full coverage) or "remove the payments dated inside the certificate period" (partial coverage, no premium figure) |
-| `sub_has_gl_cert` | On a GL audit, sub cost was counted and a certificate covers that sub for general liability across the period. When the bill states a required limit, the certificate has to show it; a limit that can't be read does not count | Same as above |
+| `sub_has_wc_cert` | On a workers comp audit, a sub was billed as payroll or cost, and a certificate in the upload shows a workers comp policy number and dates in force for that sub across the audit period | $0 (full coverage) or "remove the payments dated inside the certificate period" (partial coverage, no premium figure) |
+| `sub_has_gl_cert` | On a GL audit, sub cost was counted and a certificate shows a general liability policy number and covers that sub across the period. When the bill states a required limit, the certificate has to show it; a limit that can't be read does not count | Same as above |
 | `overtime_premium_included` | The worksheet states overtime premium is in the base, or the audited payroll equals straight time plus full overtime on a summary that splits the premium portion, to within a margin that is always smaller than the premium itself | Audited payroll minus the premium portion. The straight-time part of overtime stays |
 | `owner_excluded` | A named owner or officer is counted while the summary marks them excluded | $0 |
 | `owner_over_cap` | A named owner or officer is counted above a cap the audit document itself states | The cap |
 | `class_code_mismatch` | A named person's payroll sits in a class code the summary does not carry for them, and the same bill rates that code higher than the summary's code. A move into a cheaper code, or one the bill does not rate, stays Pay | Same payroll under the summary's code. The disputed premium is the rate difference on that payroll |
 | `total_contract_as_payroll` | The full contract amount was used when the records split labor and materials | The labor amount |
 
-Which certificate counts follows the policy the bill audits. A bill that does not say whether it
+A certificate with coverage dates but no policy number clears nothing: the handoff requires the
+policy number, and the email has to cite it. Which certificate counts follows the policy the bill audits. A bill that does not say whether it
 is a workers comp or a general liability audit applies no certificate, and the result says so. A
 combined audit flags a sub only when the certificate shows both workers comp and general
 liability in force for the period, because the line may sit under either policy.

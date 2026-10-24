@@ -1,18 +1,19 @@
 import { extractText, getDocumentProxy } from "unpdf";
 
 /**
- * The PDF's own text layer, used for the deterministic screen (Social Security numbers,
- * payroll-register signals) before the file goes anywhere else. A scanned PDF has no text
- * layer; the model's own contains_ssn flag covers that case after the read.
+ * The PDF's own text layer, page by page, used for the deterministic screen (Social Security
+ * numbers, payroll-register signals, scanned pages) before the file goes anywhere else.
  */
 export async function pdfTextLayer(
   bytes: Uint8Array,
-): Promise<{ text: string; pages: number } | null> {
+): Promise<{ pageTexts: string[]; pages: number } | null> {
   try {
     const pdf = await getDocumentProxy(bytes);
-    const result = await extractText(pdf, { mergePages: true });
-    const text = Array.isArray(result.text) ? result.text.join("\n") : String(result.text ?? "");
-    return { text, pages: result.totalPages };
+    const result = await extractText(pdf, { mergePages: false });
+    const pageTexts = Array.isArray(result.text)
+      ? result.text.map((t) => String(t ?? ""))
+      : [String(result.text ?? "")];
+    return { pageTexts, pages: result.totalPages };
   } catch (err) {
     console.warn("[premiumflag] no text layer:", err instanceof Error ? err.message : err);
     return null;

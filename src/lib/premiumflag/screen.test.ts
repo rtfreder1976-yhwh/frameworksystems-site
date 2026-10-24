@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 import {
   hasSsn,
   headerLooksLikeRegister,
+  pagesWithoutText,
   parseCsv,
   screenCsv,
+  screenPdf,
   screenText,
   textLooksLikeRegister,
 } from "./screen.ts";
@@ -85,5 +87,42 @@ describe("screenText", () => {
   it("refuses an SSN in any slot", () => {
     assert.equal(screenText("Owner 123-45-6789", "certificate").ok, false);
     assert.equal(screenText("Owner 123-45-6789", "bill").ok, false);
+  });
+});
+
+describe("screenPdf", () => {
+  const page =
+    "Payroll summary by class code. Plumbers 5183 AL straight time 240000 overtime 10000.";
+
+  it("refuses a payroll summary with a page that has no text to check", () => {
+    const v = screenPdf([page, "  \n "], "summary");
+    assert.equal(v.ok, false);
+    if (!v.ok) {
+      assert.equal(v.reason, "scanned");
+      assert.match(v.message, /Page 2 has no text/);
+    }
+  });
+  it("refuses a payroll summary PDF that could not be opened", () => {
+    const v = screenPdf(null, "summary");
+    assert.equal(v.ok, false);
+    if (!v.ok) assert.equal(v.reason, "scanned");
+  });
+  it("lets a scanned bill or certificate go on to the reader", () => {
+    assert.deepEqual(screenPdf(["", ""], "bill"), { ok: true });
+    assert.deepEqual(screenPdf(null, "certificate"), { ok: true });
+  });
+  it("still refuses an SSN on any page it can read", () => {
+    const v = screenPdf([page, "Owner 123-45-6789"], "bill");
+    assert.equal(v.ok, false);
+    if (!v.ok) assert.equal(v.reason, "ssn");
+  });
+  it("counts pages with almost no text", () => {
+    assert.deepEqual(pagesWithoutText([page, "", "Page 3", page]), [2, 3]);
+  });
+});
+
+describe("parseCsv byte-order mark", () => {
+  it("strips the mark Excel puts in front of the first header", () => {
+    assert.equal(parseCsv("\uFEFFName,Wages\nJohn Doe,52000\n")[0]?.[0], "Name");
   });
 });

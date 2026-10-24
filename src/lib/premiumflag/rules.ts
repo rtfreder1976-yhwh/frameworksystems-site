@@ -9,7 +9,7 @@ import type {
   SummaryExtract,
   SummaryRow,
 } from "./types.ts";
-import { coverage, fmtDate, money, sameClassCode } from "./match.ts";
+import { coverage, fmtDate, money, periodFit, sameClassCode } from "./match.ts";
 
 /**
  * The Pay / Flag engine. Pure code, no model.
@@ -82,6 +82,24 @@ const rateText = (r: number): string => `$${r.toFixed(2)} per $100`;
  */
 function sitsOn(a: number, b: number, premiumPortion: number): boolean {
   return Math.abs(a - b) <= Math.min(Math.max(1, Math.abs(b) * 0.0005), premiumPortion / 3);
+}
+
+/**
+ * A payroll summary for other dates cannot contradict this bill, so it stops the compare. A
+ * summary with no dates (most CSVs) goes on, and the result says what it assumed.
+ */
+export function summaryPeriodProblem(bill: BillExtract, summary: SummaryExtract): string | null {
+  const fit = periodFit(
+    summary.period_start,
+    summary.period_end,
+    bill.audit_period_start,
+    bill.audit_period_end,
+  );
+  if (fit === "match" || fit === "unknown") return null;
+  const covers = `${fmtDate(summary.period_start)} to ${fmtDate(summary.period_end)}`;
+  return fit === "partial"
+    ? `The payroll summary covers ${covers}, which is not the same period as the audit (${period(bill)}). Export the summary for the audit period, so every line is compared with the same months.`
+    : `The payroll summary covers ${covers}. The bill audits ${period(bill)}. Upload the payroll summary for the audit period.`;
 }
 
 export function evaluate(input: EvaluateInput): Evaluation {
@@ -159,6 +177,20 @@ export function evaluate(input: EvaluateInput): Evaluation {
   if (!bill.audit_period_start || !bill.audit_period_end) {
     warnings.push(
       "The audit period could not be read from the bill, so certificates could not be checked against it. Any sub line stays Pay until that is fixed.",
+    );
+  }
+  if (
+    bill.audit_period_start &&
+    bill.audit_period_end &&
+    periodFit(
+      summary.period_start,
+      summary.period_end,
+      bill.audit_period_start,
+      bill.audit_period_end,
+    ) === "unknown"
+  ) {
+    warnings.push(
+      `The payroll summary does not show its dates. The result assumes it covers the audit period (${period(bill)}).`,
     );
   }
   if (bill.policy_type === "unknown" && certificates.length) {
@@ -252,7 +284,8 @@ function wcCertificateFlag(line: BillLine, { bill, certs }: Ctx): Flag | null {
   const who = line.entity_name ?? "This sub";
   let partial: Flag | null = null;
   for (const c of certs) {
-    if (!hasWc(c)) continue;
+    // Dates alone don't prove coverage. The certificate has to show the policy number.
+    if (!c.wc_policy_number?.trim()) continue;
     const cov = coverage(
       c.wc_effective,
       c.wc_expiration,
@@ -297,7 +330,7 @@ function glCertificateFlag(line: BillLine, { bill, certs }: Ctx): Flag | null {
   const required = bill.required_gl_each_occurrence;
   let partial: Flag | null = null;
   for (const c of certs) {
-    if (!hasGl(c)) continue;
+    if (!c.gl_policy_number?.trim()) continue;
     // A limit the audit states has to be shown on the certificate. An unreadable one does not meet it.
     if (required != null && (c.gl_each_occurrence == null || c.gl_each_occurrence < required)) {
       continue;
@@ -509,6 +542,13 @@ function payReason(line: BillLine, { bill, rows, certs }: Ctx): string {
     }
     if (!bill.audit_period_start || !bill.audit_period_end) {
       return `${line.entity_name} has a certificate in the upload, but the audit period could not be read from the bill, so the dates could not be checked.`;
+    }
+    const policy = bill.policy_type;
+    const noNumber = (c: FlatCertificate): boolean =>
+      (policy !== "general_liability" && hasWc(c) && !c.wc_policy_number?.trim()) ||
+      (policy !== "workers_comp" && hasGl(c) && !c.gl_policy_number?.trim());
+    if (certs.some(noNumber)) {
+      return `The certificate in the upload for ${line.entity_name} shows coverage dates but no policy number, so it can't prove the sub was insured.`;
     }
     const required = bill.required_gl_each_occurrence;
     if (
