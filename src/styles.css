@@ -48,9 +48,16 @@
 }
 
 .ticket {
-  background:
-    linear-gradient(180deg, rgba(196, 82, 42, 0.08), transparent 42%),
-    var(--color-paper);
+  background: linear-gradient(180deg, rgba(196, 82, 42, 0.08), transparent 42%), var(--color-paper);
   border: 1px solid var(--color-rule);
   box-shadow: 0 18px 40px rgba(13, 27, 42, 0.08);
+}
+
+/* <button> elements styled with site.css's .button: drop the UA border and font. */
+.pf-button {
+  border: 0;
+  font-family: inherit;
+}
+.pf-button:disabled {
+  opacity: 0.55;
 }
