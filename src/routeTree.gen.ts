@@ -17,6 +17,7 @@ import { Route as HowItWorksRouteImport } from './routes/how-it-works'
 import { Route as InvoiceflagRouteImport } from './routes/invoiceflag'
 import { Route as PlatformRouteImport } from './routes/platform'
 import { Route as PlumbingRouteImport } from './routes/plumbing'
+import { Route as PremiumRouteImport } from './routes/premium'
 import { Route as ServicesRouteImport } from './routes/services'
 import { Route as ShippingRouteImport } from './routes/shipping'
 
@@ -60,6 +61,11 @@ const PlumbingRoute = PlumbingRouteImport.update({
   path: '/plumbing',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PremiumRoute = PremiumRouteImport.update({
+  id: '/premium',
+  path: '/premium',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ServicesRoute = ServicesRouteImport.update({
   id: '/services',
   path: '/services',
@@ -80,6 +86,7 @@ export interface FileRoutesByFullPath {
   '/invoiceflag': typeof InvoiceflagRoute
   '/platform': typeof PlatformRoute
   '/plumbing': typeof PlumbingRoute
+  '/premium': typeof PremiumRoute
   '/services': typeof ServicesRoute
   '/shipping': typeof ShippingRoute
 }
@@ -92,6 +99,7 @@ export interface FileRoutesByTo {
   '/invoiceflag': typeof InvoiceflagRoute
   '/platform': typeof PlatformRoute
   '/plumbing': typeof PlumbingRoute
+  '/premium': typeof PremiumRoute
   '/services': typeof ServicesRoute
   '/shipping': typeof ShippingRoute
 }
@@ -105,6 +113,7 @@ export interface FileRoutesById {
   '/invoiceflag': typeof InvoiceflagRoute
   '/platform': typeof PlatformRoute
   '/plumbing': typeof PlumbingRoute
+  '/premium': typeof PremiumRoute
   '/services': typeof ServicesRoute
   '/shipping': typeof ShippingRoute
 }
@@ -119,6 +128,7 @@ export interface FileRouteTypes {
     | '/invoiceflag'
     | '/platform'
     | '/plumbing'
+    | '/premium'
     | '/services'
     | '/shipping'
   fileRoutesByTo: FileRoutesByTo
@@ -131,6 +141,7 @@ export interface FileRouteTypes {
     | '/invoiceflag'
     | '/platform'
     | '/plumbing'
+    | '/premium'
     | '/services'
     | '/shipping'
   id:
@@ -143,6 +154,7 @@ export interface FileRouteTypes {
     | '/invoiceflag'
     | '/platform'
     | '/plumbing'
+    | '/premium'
     | '/services'
     | '/shipping'
   fileRoutesById: FileRoutesById
@@ -156,6 +168,7 @@ export interface RootRouteChildren {
   InvoiceflagRoute: typeof InvoiceflagRoute
   PlatformRoute: typeof PlatformRoute
   PlumbingRoute: typeof PlumbingRoute
+  PremiumRoute: typeof PremiumRoute
   ServicesRoute: typeof ServicesRoute
   ShippingRoute: typeof ShippingRoute
 }
@@ -218,6 +231,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PlumbingRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/premium': {
+      id: '/premium'
+      path: '/premium'
+      fullPath: '/premium'
+      preLoaderRoute: typeof PremiumRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/services': {
       id: '/services'
       path: '/services'
@@ -244,6 +264,7 @@ const rootRouteChildren: RootRouteChildren = {
   InvoiceflagRoute: InvoiceflagRoute,
   PlatformRoute: PlatformRoute,
   PlumbingRoute: PlumbingRoute,
+  PremiumRoute: PremiumRoute,
   ServicesRoute: ServicesRoute,
   ShippingRoute: ShippingRoute,
 }
