@@ -1,5 +1,5 @@
 import { autoAlign, mergeAlignments } from "./match.ts";
-import { evaluate } from "./rules.ts";
+import { evaluate, summaryPeriodProblem } from "./rules.ts";
 import { alignWithModel, friendlyError } from "./extract.server";
 import { newAnalysisId, signAnalysis } from "./sign.server";
 import type {
@@ -46,6 +46,10 @@ export async function analyze(input: AnalyzeInput): Promise<AnalyzeOutcome> {
     ...input.summary.extract,
     rows: input.summary.extract.rows.map((r, i) => ({ ...r, id: `R${i + 1}` })),
   };
+  const periodProblem = summaryPeriodProblem(bill, summary);
+  if (periodProblem) {
+    return { ok: false, missing: ["payroll summary for the audit period"], message: periodProblem };
+  }
   const certificates: FlatCertificate[] = input.certificates.flatMap((f, fi) =>
     f.extract.certificates.map((c, ci) => ({ ...c, id: `C${fi + 1}-${ci + 1}`, file: f.filename })),
   );

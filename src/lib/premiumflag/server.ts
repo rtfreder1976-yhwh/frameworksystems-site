@@ -6,6 +6,7 @@ import {
   CertificatesExtractSchema,
   SummaryExtractSchema,
 } from "./types.ts";
+import { MAX_CERTIFICATE_FILES } from "./limits.ts";
 
 /**
  * PremiumFlag server functions. Each handler loads its server-only module inside the handler,
@@ -33,7 +34,7 @@ const AnalyzeSchema = z.object({
     .nullable(),
   certificates: z
     .array(z.object({ filename: z.string().min(1).max(200), extract: CertificatesExtractSchema }))
-    .max(60),
+    .max(MAX_CERTIFICATE_FILES),
 });
 
 export const analyzeBillFn = createServerFn({ method: "POST" })

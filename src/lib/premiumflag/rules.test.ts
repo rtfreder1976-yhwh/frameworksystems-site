@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { evaluate } from "./rules.ts";
+import { evaluate, summaryPeriodProblem } from "./rules.ts";
 import { autoAlign } from "./match.ts";
 import { FILES, align, bill, cert, line, row, summary } from "./test-fixtures.ts";
 
@@ -297,6 +297,77 @@ describe("evaluate: what stays Pay", () => {
       assert.equal(e.lines[0]!.label, "pay");
       assert.match(e.lines[0]!.reason, /does not show that 8810 costs more/);
     }
+  });
+});
+
+describe("evaluate: a certificate needs its policy number", () => {
+  it("a workers comp certificate with dates but no policy number cannot clear a sub", () => {
+    const e = evaluate({
+      bill: bill({ lines: [subLine()] }),
+      summary: summary([]),
+      certificates: [wcCert({ wc_policy_number: null })],
+      alignment: align({ L1: { certs: ["C1-1"] } }),
+      files: FILES,
+    });
+    assert.equal(e.lines[0]!.label, "pay");
+    assert.match(e.lines[0]!.reason, /no policy number/);
+  });
+
+  it("a GL certificate with dates but no policy number cannot clear a sub on a GL audit", () => {
+    const c = cert({
+      id: "C1-1",
+      insured_name: "John Smith Roofing LLC",
+      gl_policy_number: "  ",
+      gl_effective: "2025-01-01",
+      gl_expiration: "2026-01-01",
+      gl_each_occurrence: 1000000,
+    });
+    const e = evaluate({
+      bill: bill({ policy_type: "general_liability", lines: [subLine()] }),
+      summary: summary([]),
+      certificates: [c],
+      alignment: align({ L1: { certs: ["C1-1"] } }),
+      files: FILES,
+    });
+    assert.equal(e.lines[0]!.label, "pay");
+    assert.match(e.lines[0]!.reason, /no policy number/);
+  });
+});
+
+describe("summaryPeriodProblem", () => {
+  it("stops a summary from another year", () => {
+    const m = summaryPeriodProblem(bill(), {
+      ...summary([]),
+      period_start: "2024-01-01",
+      period_end: "2024-12-31",
+    });
+    assert.match(m ?? "", /covers 01\/01\/2024 to 12\/31\/2024/);
+    assert.match(m ?? "", /audits 01\/01\/2025 to 12\/31\/2025/);
+  });
+
+  it("stops a summary whose dates overlap the audit period but don't match it", () => {
+    const m = summaryPeriodProblem(
+      bill({ audit_period_start: "2025-07-01", audit_period_end: "2026-07-01" }),
+      summary([]),
+    );
+    assert.match(m ?? "", /not the same period as the audit/);
+  });
+
+  it("lets a summary for the audit period through", () => {
+    assert.equal(summaryPeriodProblem(bill(), summary([])), null);
+  });
+
+  it("lets a summary with no dates through, and the result says what it assumed", () => {
+    const s = { ...summary([]), period_start: null, period_end: null };
+    assert.equal(summaryPeriodProblem(bill(), s), null);
+    const e = evaluate({
+      bill: bill({ lines: [subLine()] }),
+      summary: s,
+      certificates: [],
+      alignment: align({}),
+      files: FILES,
+    });
+    assert.match(e.warnings.join(" "), /does not show its dates/);
   });
 });
 

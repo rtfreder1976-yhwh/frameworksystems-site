@@ -181,7 +181,7 @@ function Premium() {
           <div className="notice" style={{ marginTop: 24 }}>
             <p>
               Charges on the card: <strong>FRAMEWORK SYSTEMS</strong>. No login, no tokens, no plan.
-              The files are read once to produce the result and are not stored.
+              We don&apos;t keep the files: each is read once to produce the result.
             </p>
           </div>
         </div>
@@ -194,7 +194,10 @@ function Premium() {
             <h2>The bill already arrived.</h2>
             <ul className="detail-list">
               <li>A contractor's workers comp or general liability audit bill or worksheet.</li>
-              <li>A payroll summary by class code. Not a register, not a stack of pay stubs.</li>
+              <li>
+                A payroll summary by class code, as a CSV or a PDF with text. Not a register, not a
+                scan.
+              </li>
               <li>The certificates you collected from your subs.</li>
             </ul>
           </div>

@@ -9,6 +9,7 @@ import {
   namesMatch,
   normalizeName,
   parseDate,
+  periodFit,
   sameClassCode,
 } from "./match.ts";
 import type { BillExtract, FlatCertificate, SummaryRow } from "./types.ts";
@@ -190,5 +191,22 @@ describe("autoAlign", () => {
     const l2 = m.lines.find((l) => l.line_id === "L2");
     assert.deepEqual(l2?.certificate_ids, ["C1-1"]);
     assert.equal(l2?.note, "same sub");
+  });
+});
+
+describe("periodFit", () => {
+  it("matches a summary within a month of the audit period at each end", () => {
+    assert.equal(periodFit("2025-04-01", "2026-03-31", "2025-03-15", "2026-03-15"), "match");
+    assert.equal(periodFit("2025-01-01", "2025-12-31", "2025-01-01", "2025-12-31"), "match");
+  });
+  it("calls a calendar-year summary against a mid-year policy partial", () => {
+    assert.equal(periodFit("2025-01-01", "2025-12-31", "2025-07-01", "2026-07-01"), "partial");
+  });
+  it("calls last year's summary a mismatch", () => {
+    assert.equal(periodFit("2024-01-01", "2024-12-31", "2025-01-01", "2025-12-31"), "mismatch");
+  });
+  it("is unknown when either side has no dates", () => {
+    assert.equal(periodFit(null, null, "2025-01-01", "2025-12-31"), "unknown");
+    assert.equal(periodFit("2025-01-01", "2025-12-31", null, "2025-12-31"), "unknown");
   });
 });

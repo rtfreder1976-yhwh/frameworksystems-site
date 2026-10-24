@@ -118,6 +118,29 @@ export function coverage(
   return "partial";
 }
 
+export type PeriodFit = "match" | "partial" | "mismatch" | "unknown";
+
+const DAY_MS = 86_400_000;
+
+/**
+ * How the payroll summary's dates sit against the audit period. Within a month at each end is
+ * the same period; overlapping otherwise is partial; no overlap is a mismatch.
+ */
+export function periodFit(
+  summaryStart: string | null | undefined,
+  summaryEnd: string | null | undefined,
+  auditStart: string | null | undefined,
+  auditEnd: string | null | undefined,
+): PeriodFit {
+  const s = parseDate(summaryStart);
+  const e = parseDate(summaryEnd);
+  const as = parseDate(auditStart);
+  const ae = parseDate(auditEnd);
+  if (s == null || e == null || as == null || ae == null || e < s || ae < as) return "unknown";
+  if (Math.abs(s - as) <= 31 * DAY_MS && Math.abs(e - ae) <= 31 * DAY_MS) return "match";
+  return Math.min(e, ae) - Math.max(s, as) > 0 ? "partial" : "mismatch";
+}
+
 const pad = (n: number) => String(n).padStart(2, "0");
 
 export function fmtDate(s: string | null | undefined): string {

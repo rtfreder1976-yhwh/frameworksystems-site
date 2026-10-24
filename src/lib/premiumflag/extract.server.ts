@@ -2,7 +2,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import type { z } from "zod";
 import { pdfTextLayer } from "./pdf-text.server";
-import { SSN_MESSAGE, screenCsv, screenText } from "./screen.ts";
+import { SSN_MESSAGE, screenCsv, screenPdf } from "./screen.ts";
+import { MAX_FILE_BYTES } from "./limits.ts";
 import {
   AlignmentSchema,
   BillExtractSchema,
@@ -24,7 +25,6 @@ import type {
  */
 
 export const MODEL = "claude-opus-5-5";
-const MAX_FILE_BYTES = 3 * 1024 * 1024;
 const MAX_CSV_CHARS = 1_000_000;
 
 export type UploadKind = "bill" | "summary" | "certificate";
@@ -38,7 +38,13 @@ export type Upload = {
 };
 
 export type RefusalReason =
-  "ssn" | "register" | "records_request" | "not_a_bill" | "not_a_summary" | "not_a_certificate";
+  | "ssn"
+  | "register"
+  | "scanned"
+  | "records_request"
+  | "not_a_bill"
+  | "not_a_summary"
+  | "not_a_certificate";
 
 export type ExtractOutcome =
   | { ok: true; kind: "bill"; filename: string; extract: BillExtract }
@@ -181,7 +187,7 @@ export async function extractUpload(upload: Upload): Promise<ExtractOutcome> {
           "Only the payroll summary can be a CSV. The bill and the certificates need to be PDFs.",
         );
       }
-      const text = bytes.toString("utf8").replace(/^/, "");
+      const text = bytes.toString("utf8").replace(/^\uFEFF/, "");
       if (text.length > MAX_CSV_CHARS) {
         return fail(
           filename,
@@ -208,16 +214,14 @@ export async function extractUpload(upload: Upload): Promise<ExtractOutcome> {
 
     if (!isPdf(bytes)) return fail(filename, "That file is not a PDF.");
     const layer = await pdfTextLayer(new Uint8Array(bytes));
-    if (layer) {
-      if (layer.pages > MAX_PAGES[kind]) {
-        return fail(
-          filename,
-          `${filename} runs ${layer.pages} pages. The limit here is ${MAX_PAGES[kind]}. Send only the audit pages.`,
-        );
-      }
-      const verdict = screenText(layer.text, kind);
-      if (!verdict.ok) return refuse(filename, verdict.reason, verdict.message);
+    if (layer && layer.pages > MAX_PAGES[kind]) {
+      return fail(
+        filename,
+        `${filename} runs ${layer.pages} pages. The limit here is ${MAX_PAGES[kind]}. Send only the audit pages.`,
+      );
     }
+    const verdict = screenPdf(layer?.pageTexts ?? null, kind);
+    if (!verdict.ok) return refuse(filename, verdict.reason, verdict.message);
     const content: Content = [
       {
         type: "document",

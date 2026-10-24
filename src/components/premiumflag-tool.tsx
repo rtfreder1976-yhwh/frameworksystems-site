@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { unzipSync } from "fflate";
 import { analyzeBillFn, extractDocumentFn, unlockEmailFn } from "@/lib/premiumflag/server";
 import type { Analysis } from "@/lib/premiumflag/types";
 import { fmtDate, money } from "@/lib/premiumflag/match";
+import { MAX_CERTIFICATE_FILES, MAX_FILE_BYTES, MAX_ZIP_BYTES } from "@/lib/premiumflag/limits";
+import { TOO_MANY_CERTIFICATES, unpackCertificateZip } from "@/lib/premiumflag/zip";
 import { EMAIL, EMAIL_LABEL, PREMIUMFLAG_PRICE, PREMIUMFLAG_STRIPE_URL } from "@/lib/site";
 
 const STORAGE_KEY = "premiumflag.result.v1";
-const MAX_FILE_BYTES = 3 * 1024 * 1024;
 
 type Stored = { analysis: Analysis; sig: string };
 type DocKind = "bill" | "summary" | "certificate";
@@ -71,28 +71,31 @@ function isCsv(file: File): boolean {
   return /\.csv$/i.test(file.name) || file.type === "text/csv";
 }
 
+function isZip(file: File): boolean {
+  return /\.zip$/i.test(file.name);
+}
+
+/** Every certificate as its own read, capped before any read starts. */
 async function prepareCertificates(files: File[]): Promise<Prepared[]> {
   const out: Prepared[] = [];
   for (const f of files) {
-    if (/\.zip$/i.test(f.name)) {
-      const entries = unzipSync(new Uint8Array(await f.arrayBuffer()));
-      let found = 0;
-      for (const [name, bytes] of Object.entries(entries)) {
-        if (!/\.pdf$/i.test(name) || /(^|\/)__MACOSX\//.test(name) || /(^|\/)\./.test(name)) {
-          continue;
-        }
-        if (bytes.length > MAX_FILE_BYTES)
-          throw new Error(`${name} inside ${f.name} is over 3 MB.`);
-        found += 1;
+    if (isZip(f)) {
+      if (f.size > MAX_ZIP_BYTES) {
+        throw new Error(
+          `${f.name} is over ${MAX_ZIP_BYTES / (1024 * 1024)} MB. Zip only the certificates for this bill.`,
+        );
+      }
+      const data = new Uint8Array(await f.arrayBuffer());
+      for (const entry of unpackCertificateZip(f.name, data, out.length)) {
         out.push({
           kind: "certificate",
-          filename: name.split("/").pop() ?? name,
+          filename: entry.name,
           mediaType: "application/pdf",
-          base64: bytesToBase64(bytes),
+          base64: bytesToBase64(entry.bytes),
         });
       }
-      if (!found) throw new Error(`${f.name} has no PDF certificates in it.`);
     } else {
+      if (out.length >= MAX_CERTIFICATE_FILES) throw new Error(TOO_MANY_CERTIFICATES);
       out.push({
         kind: "certificate",
         filename: f.name,
@@ -160,7 +163,7 @@ export function PremiumFlagTool({ sessionId }: { sessionId?: string }) {
     if (!billFile || !summaryFile) return;
     setUnlock({ kind: "idle" });
     saveStored(null);
-    for (const f of [billFile, summaryFile, ...certFiles]) {
+    for (const f of [billFile, summaryFile, ...certFiles.filter((c) => !isZip(c))]) {
       if (f.size > MAX_FILE_BYTES) {
         setPhase({
           kind: "stopped",
@@ -337,7 +340,7 @@ export function PremiumFlagTool({ sessionId }: { sessionId?: string }) {
           <FileField
             id="pf-summary"
             label="2. Payroll summary"
-            hint="By person or role, state, class code, straight time, overtime, overtime premium. CSV or PDF. Not a register."
+            hint="By person or role, state, class code, straight time, overtime, overtime premium. A CSV, or a PDF with text. Not a register, not a scan."
             accept=".csv,text/csv,application/pdf,.pdf"
             files={summaryFile ? [summaryFile] : []}
             onChange={(fs) => setSummaryFile(fs[0] ?? null)}
@@ -345,7 +348,7 @@ export function PremiumFlagTool({ sessionId }: { sessionId?: string }) {
           <FileField
             id="pf-certs"
             label="3. Certificates for subs"
-            hint="Workers comp or general liability certificates. PDFs, or one zip of PDFs. Skip only if the bill names no subs."
+            hint="Workers comp or general liability certificates, up to 60. PDFs, or a zip of PDFs. Skip only if the bill names no subs."
             accept="application/pdf,.pdf,.zip,application/zip"
             multiple
             files={certFiles}
@@ -353,8 +356,10 @@ export function PremiumFlagTool({ sessionId }: { sessionId?: string }) {
           />
         </div>
         <p className="form-fine">
-          Up to 3 MB a file. No Social Security numbers: a file with them is refused before it is
-          read. The files are read once to produce the result and are not stored.
+          Up to 3 MB a file. No Social Security numbers. A CSV or a PDF with text is checked for
+          them before anything reads it, and the payroll summary has to be one of those. A scanned
+          bill or certificate is checked by the reader, which refuses it if it finds one. We
+          don&apos;t keep the files: each is read once to produce the result.
         </p>
         <div className="cta-row" style={{ marginBottom: 0 }}>
           <button type="submit" className="pf-button button button-primary" disabled={!ready}>
