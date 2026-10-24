@@ -9,6 +9,20 @@ import { z } from "zod";
  * Pay or Flag, and it only ever flags a line that a document in the upload contradicts.
  */
 
+/**
+ * Labels the model fills in. The installed SDK sends enum fields to the API as plain strings with
+ * the allowed values only in the description, so a read can come back "Workers Comp" or "per 100".
+ * Normalize case and spacing, and fall back to the label that makes no claim, so one odd word
+ * cannot sink a whole read. Every fallback is one no rule fires on.
+ */
+const normalizeLabel = (v: unknown): unknown =>
+  typeof v === "string"
+    ? v
+        .trim()
+        .toLowerCase()
+        .replace(/[\s-]+/g, "_")
+    : v;
+
 export const PolicyTypeSchema = z.enum(["workers_comp", "general_liability", "both", "unknown"]);
 export type PolicyType = z.infer<typeof PolicyTypeSchema>;
 
@@ -33,16 +47,18 @@ export type LineBasis = z.infer<typeof LineBasisSchema>;
 export const BillLineSchema = z.object({
   id: z.string(),
   description: z.string(),
-  category: LineCategorySchema,
+  category: z.preprocess(normalizeLabel, LineCategorySchema).catch("other"),
   class_code: z.string().nullable(),
   state: z.string().nullable(),
   entity_name: z.string().nullable(),
-  basis: LineBasisSchema,
+  basis: z.preprocess(normalizeLabel, LineBasisSchema).catch("unknown"),
   /** The exposure the carrier used for the line: payroll, or cost paid to a sub. */
   audited_amount: z.number().nullable(),
   estimated_amount: z.number().nullable(),
   rate: z.number().nullable(),
-  rate_basis: z.enum(["per_100", "per_1000", "unknown"]),
+  rate_basis: z
+    .preprocess(normalizeLabel, z.enum(["per_100", "per_1000", "unknown"]))
+    .catch("unknown"),
   premium: z.number().nullable(),
   /** true only when the document shows overtime premium (the extra half) inside the base. */
   includes_overtime_premium: z.boolean().nullable(),
@@ -60,11 +76,11 @@ export const BillDocumentTypeSchema = z.enum([
 export type BillDocumentType = z.infer<typeof BillDocumentTypeSchema>;
 
 export const BillExtractSchema = z.object({
-  document_type: BillDocumentTypeSchema,
+  document_type: z.preprocess(normalizeLabel, BillDocumentTypeSchema).catch("other"),
   carrier: z.string().nullable(),
   insured_name: z.string().nullable(),
   policy_number: z.string().nullable(),
-  policy_type: PolicyTypeSchema,
+  policy_type: z.preprocess(normalizeLabel, PolicyTypeSchema).catch("unknown"),
   audit_period_start: z.string().nullable(),
   audit_period_end: z.string().nullable(),
   bill_date: z.string().nullable(),
@@ -104,7 +120,9 @@ export const SummaryRowSchema = z.object({
 export type SummaryRow = z.infer<typeof SummaryRowSchema>;
 
 export const SummaryExtractSchema = z.object({
-  document_type: z.enum(["payroll_summary", "payroll_register", "other"]),
+  document_type: z
+    .preprocess(normalizeLabel, z.enum(["payroll_summary", "payroll_register", "other"]))
+    .catch("other"),
   period_start: z.string().nullable(),
   period_end: z.string().nullable(),
   rows: z.array(SummaryRowSchema),
@@ -133,7 +151,7 @@ export const CertificateSchema = z.object({
 export type Certificate = z.infer<typeof CertificateSchema>;
 
 export const CertificatesExtractSchema = z.object({
-  document_type: z.enum(["certificate", "other"]),
+  document_type: z.preprocess(normalizeLabel, z.enum(["certificate", "other"])).catch("other"),
   certificates: z.array(CertificateSchema),
   contains_ssn: z.boolean(),
   reading_notes: z.string().nullable(),

@@ -16,7 +16,7 @@ import { coverage, fmtDate, money, sameClassCode } from "./match.ts";
  *
  * A line is flagged only when a document in the upload contradicts it, and only through one
  * of the rules the handoff lists. A bill that is bigger than the estimate is the true-up:
- * it is never a flag on its own.
+ * it is never a flag on its own. When the documents leave a rule in doubt, the line is Pay.
  */
 
 export type EvaluateInput = {
@@ -34,6 +34,8 @@ type Flag = {
   ourAmount: number | null;
   exposure: number | null;
   partial: boolean;
+  /** Premium in dispute, when the rule knows it better than the line's own rate does. */
+  premium?: number | null;
   reason: string;
   proof: { file: string; detail: string };
 };
@@ -58,6 +60,29 @@ const isSubLike = (line: BillLine): boolean =>
   line.category === "subcontractor" ||
   line.basis === "subcontract_cost" ||
   line.basis === "total_contract";
+const period = (bill: BillExtract): string =>
+  `${fmtDate(bill.audit_period_start)} to ${fmtDate(bill.audit_period_end)}`;
+const hasWc = (c: FlatCertificate): boolean =>
+  Boolean(c.wc_policy_number || c.wc_effective || c.wc_expiration);
+const hasGl = (c: FlatCertificate): boolean =>
+  Boolean(c.gl_policy_number || c.gl_effective || c.gl_expiration);
+
+/** A printed rate as dollars per $100 of exposure, or null when the bill does not say. */
+function per100(rate: number | null, basis: BillLine["rate_basis"]): number | null {
+  if (rate == null) return null;
+  if (basis === "per_100") return rate;
+  if (basis === "per_1000") return rate / 10;
+  return null;
+}
+const rateText = (r: number): string => `$${r.toFixed(2)} per $100`;
+
+/**
+ * a equals b, to within a margin that is always smaller than the overtime premium itself, so a
+ * bill that already left the premium out can never read as one that kept it.
+ */
+function sitsOn(a: number, b: number, premiumPortion: number): boolean {
+  return Math.abs(a - b) <= Math.min(Math.max(1, Math.abs(b) * 0.0005), premiumPortion / 3);
+}
 
 export function evaluate(input: EvaluateInput): Evaluation {
   const { bill, summary, certificates, alignment, files } = input;
@@ -86,11 +111,12 @@ export function evaluate(input: EvaluateInput): Evaluation {
     };
     const flag = judge(line, ctx);
     if (flag) {
-      // A reclassification disputes the rate, not the payroll, so its premium is unknown.
       const disputedPremium =
-        flag.partial || flag.rule === "class_code_mismatch"
-          ? null
-          : premiumFor(line, flag.exposure);
+        flag.premium !== undefined
+          ? flag.premium
+          : flag.partial
+            ? null
+            : premiumFor(line, flag.exposure);
       return {
         ...base,
         label: "flag",
@@ -133,6 +159,11 @@ export function evaluate(input: EvaluateInput): Evaluation {
   if (!bill.audit_period_start || !bill.audit_period_end) {
     warnings.push(
       "The audit period could not be read from the bill, so certificates could not be checked against it. Any sub line stays Pay until that is fixed.",
+    );
+  }
+  if (bill.policy_type === "unknown" && certificates.length) {
+    warnings.push(
+      "The bill does not say whether it is a workers comp or a general liability audit, so no certificate was applied to it.",
     );
   }
   if (!bill.policy_number) {
@@ -188,115 +219,133 @@ function premiumFor(line: BillLine, exposure: number | null): number | null {
   if (line.premium != null && line.audited_amount != null && line.audited_amount > 0) {
     return round2((line.premium * exposure) / line.audited_amount);
   }
-  if (line.rate != null && line.rate_basis !== "unknown") {
-    return round2((exposure * line.rate) / (line.rate_basis === "per_100" ? 100 : 1000));
-  }
-  return null;
+  const rate = per100(line.rate, line.rate_basis);
+  return rate != null ? round2((exposure * rate) / 100) : null;
 }
 
-/** A sub billed as payroll or cost, with a certificate in the upload in force for the period. */
-function subCertificateFlag(line: BillLine, { bill, certs }: Ctx): Flag | null {
-  if (!certs.length) return null;
+/**
+ * A sub billed as payroll or cost, with a certificate in the upload in force for the period.
+ * Which certificate counts depends on the policy the bill audits. A bill that does not say
+ * applies none. A combined audit flags only a sub insured on both policies, because the line
+ * may sit under either one.
+ */
+function subCertificateFlag(line: BillLine, ctx: Ctx): Flag | null {
+  const policy = ctx.bill.policy_type;
+  if (!ctx.certs.length || policy === "unknown") return null;
+  const wc = policy === "general_liability" ? null : wcCertificateFlag(line, ctx);
+  const gl = policy === "workers_comp" ? null : glCertificateFlag(line, ctx);
+  if (policy === "workers_comp") return wc;
+  if (policy === "general_liability") return gl;
+  if (!wc || !gl) return null;
+  if (wc.partial || gl.partial) return wc.partial ? wc : gl;
+  return {
+    ...wc,
+    reason: `${line.entity_name ?? "This sub"} carried workers comp and general liability for the whole audit period (${period(ctx.bill)}). On a combined audit, cost paid to a sub insured on both does not belong in the audited base.`,
+    proof: {
+      file: wc.proof.file === gl.proof.file ? wc.proof.file : `${wc.proof.file}, ${gl.proof.file}`,
+      detail: `${wc.proof.detail} ${gl.proof.detail}`,
+    },
+  };
+}
+
+function wcCertificateFlag(line: BillLine, { bill, certs }: Ctx): Flag | null {
   const who = line.entity_name ?? "This sub";
-  const period = `${fmtDate(bill.audit_period_start)} to ${fmtDate(bill.audit_period_end)}`;
-  const wantWc = bill.policy_type !== "general_liability";
-  const wantGl = bill.policy_type !== "workers_comp";
   let partial: Flag | null = null;
-
-  if (wantWc) {
-    for (const c of certs) {
-      if (!c.wc_policy_number && !c.wc_effective && !c.wc_expiration) continue;
-      const cov = coverage(
+  for (const c of certs) {
+    if (!hasWc(c)) continue;
+    const cov = coverage(
+      c.wc_effective,
+      c.wc_expiration,
+      bill.audit_period_start,
+      bill.audit_period_end,
+    );
+    if (cov !== "full" && cov !== "partial") continue;
+    const proof = {
+      file: c.file,
+      detail: `Certificate of insurance for ${c.insured_name}: workers compensation${
+        c.insurer ? ` with ${c.insurer}` : ""
+      }${c.wc_policy_number ? `, policy ${c.wc_policy_number}` : ""}, effective ${fmtDate(
         c.wc_effective,
-        c.wc_expiration,
-        bill.audit_period_start,
-        bill.audit_period_end,
-      );
-      if (cov !== "full" && cov !== "partial") continue;
-      const proof = {
-        file: c.file,
-        detail: `Certificate of insurance for ${c.insured_name}: workers compensation${
-          c.insurer ? ` with ${c.insurer}` : ""
-        }${c.wc_policy_number ? `, policy ${c.wc_policy_number}` : ""}, effective ${fmtDate(
-          c.wc_effective,
-        )} to ${fmtDate(c.wc_expiration)}.`,
-      };
-      if (cov === "full") {
-        return {
-          rule: "sub_has_wc_cert",
-          ourAmount: 0,
-          exposure: line.audited_amount,
-          partial: false,
-          reason: `${who} carried workers comp for the whole audit period (${period}). Payments to an insured sub are not payroll on this policy.`,
-          proof,
-        };
-      }
-      partial ??= {
+      )} to ${fmtDate(c.wc_expiration)}.`,
+    };
+    if (cov === "full") {
+      return {
         rule: "sub_has_wc_cert",
-        ourAmount: null,
+        ourAmount: 0,
         exposure: line.audited_amount,
-        partial: true,
-        reason: `${who} carried workers comp from ${fmtDate(c.wc_effective)} to ${fmtDate(
-          c.wc_expiration,
-        )}, inside the audit period. Payments dated inside those dates come off this line. Work outside them stays.`,
+        partial: false,
+        reason: `${who} carried workers comp for the whole audit period (${period(bill)}). Payments to an insured sub are not payroll on this policy.`,
         proof,
       };
     }
+    partial ??= {
+      rule: "sub_has_wc_cert",
+      ourAmount: null,
+      exposure: line.audited_amount,
+      partial: true,
+      reason: `${who} carried workers comp from ${fmtDate(c.wc_effective)} to ${fmtDate(
+        c.wc_expiration,
+      )}, inside the audit period. Payments dated inside those dates come off this line. Work outside them stays.`,
+      proof,
+    };
   }
+  return partial;
+}
 
-  if (wantGl) {
-    const required = bill.required_gl_each_occurrence;
-    for (const c of certs) {
-      if (!c.gl_policy_number && !c.gl_effective && !c.gl_expiration) continue;
-      if (required != null && c.gl_each_occurrence != null && c.gl_each_occurrence < required) {
-        continue;
-      }
-      const cov = coverage(
+function glCertificateFlag(line: BillLine, { bill, certs }: Ctx): Flag | null {
+  const who = line.entity_name ?? "This sub";
+  const required = bill.required_gl_each_occurrence;
+  let partial: Flag | null = null;
+  for (const c of certs) {
+    if (!hasGl(c)) continue;
+    // A limit the audit states has to be shown on the certificate. An unreadable one does not meet it.
+    if (required != null && (c.gl_each_occurrence == null || c.gl_each_occurrence < required)) {
+      continue;
+    }
+    const cov = coverage(
+      c.gl_effective,
+      c.gl_expiration,
+      bill.audit_period_start,
+      bill.audit_period_end,
+    );
+    if (cov !== "full" && cov !== "partial") continue;
+    const limits =
+      c.gl_each_occurrence != null
+        ? `, ${money(c.gl_each_occurrence)} each occurrence${
+            c.gl_aggregate != null ? ` / ${money(c.gl_aggregate)} aggregate` : ""
+          }`
+        : "";
+    const proof = {
+      file: c.file,
+      detail: `Certificate of insurance for ${c.insured_name}: general liability${
+        c.insurer ? ` with ${c.insurer}` : ""
+      }${c.gl_policy_number ? `, policy ${c.gl_policy_number}` : ""}, effective ${fmtDate(
         c.gl_effective,
-        c.gl_expiration,
-        bill.audit_period_start,
-        bill.audit_period_end,
-      );
-      if (cov !== "full" && cov !== "partial") continue;
-      const limits =
-        c.gl_each_occurrence != null
-          ? `, ${money(c.gl_each_occurrence)} each occurrence${
-              c.gl_aggregate != null ? ` / ${money(c.gl_aggregate)} aggregate` : ""
-            }`
-          : "";
-      const proof = {
-        file: c.file,
-        detail: `Certificate of insurance for ${c.insured_name}: general liability${
-          c.insurer ? ` with ${c.insurer}` : ""
-        }${c.gl_policy_number ? `, policy ${c.gl_policy_number}` : ""}, effective ${fmtDate(
-          c.gl_effective,
-        )} to ${fmtDate(c.gl_expiration)}${limits}.`,
-      };
-      if (cov === "full") {
-        return {
-          rule: "sub_has_gl_cert",
-          ourAmount: 0,
-          exposure: line.audited_amount,
-          partial: false,
-          reason: `${who} carried general liability for the whole audit period (${period})${
-            required != null ? " at the limits the audit requires" : ""
-          }. Cost paid to an insured sub does not belong in the audited base.`,
-          proof,
-        };
-      }
-      partial ??= {
+      )} to ${fmtDate(c.gl_expiration)}${limits}.`,
+    };
+    if (cov === "full") {
+      return {
         rule: "sub_has_gl_cert",
-        ourAmount: null,
+        ourAmount: 0,
         exposure: line.audited_amount,
-        partial: true,
-        reason: `${who} carried general liability from ${fmtDate(c.gl_effective)} to ${fmtDate(
-          c.gl_expiration,
-        )}, inside the audit period. Payments dated inside those dates come off this line. Work outside them stays.`,
+        partial: false,
+        reason: `${who} carried general liability for the whole audit period (${period(bill)})${
+          required != null ? " at the limits the audit requires" : ""
+        }. Cost paid to an insured sub does not belong in the audited base.`,
         proof,
       };
     }
+    partial ??= {
+      rule: "sub_has_gl_cert",
+      ourAmount: null,
+      exposure: line.audited_amount,
+      partial: true,
+      reason: `${who} carried general liability from ${fmtDate(c.gl_effective)} to ${fmtDate(
+        c.gl_expiration,
+      )}, inside the audit period. Payments dated inside those dates come off this line. Work outside them stays.`,
+      proof,
+    };
   }
-
   return partial;
 }
 
@@ -372,9 +421,9 @@ function overtimeFlag(line: BillLine, { rows, files }: Ctx): Flag | null {
   const shown = line.includes_overtime_premium === true;
   const isOtLine = line.category === "overtime";
   const numbersSay =
-    (grossIncl > 0 && otFull > 0 && approx(audited, grossIncl)) ||
-    (isOtLine && otFull > 0 && approx(audited, otFull)) ||
-    (isOtLine && approx(audited, premiumPortion));
+    (grossIncl > 0 && otFull > 0 && sitsOn(audited, grossIncl, premiumPortion)) ||
+    (isOtLine && otFull > 0 && sitsOn(audited, otFull, premiumPortion)) ||
+    (isOtLine && sitsOn(audited, premiumPortion, premiumPortion));
   if (!shown && !numbersSay) return null;
   const ourAmount = round2(Math.max(0, audited - premiumPortion));
   const reason = shown
@@ -403,30 +452,45 @@ function overtimeFlag(line: BillLine, { rows, files }: Ctx): Flag | null {
   };
 }
 
-/** A named person's payroll placed in a class code the summary does not carry for them. */
-function classCodeFlag(line: BillLine, { rows, files }: Ctx): Flag | null {
+/**
+ * A named person's payroll moved into a more expensive class code than the summary carries
+ * for them. "More expensive" has to be on the same bill: both codes printed with a rate, and
+ * the billed code's rate higher. A move into a cheaper code, or one the bill does not rate,
+ * is not a flag.
+ */
+function classCodeFlag(line: BillLine, { bill, rows, files }: Ctx): Flag | null {
   if (!line.entity_name || !line.class_code) return null;
   const coded = rows.filter((r) => r.class_code);
   if (!coded.length || coded.some((r) => sameClassCode(r.class_code, line.class_code))) {
     return null;
   }
   const codes = uniq(coded.map((r) => r.class_code as string));
+  const billed = per100(line.rate, line.rate_basis);
+  const recorded = bill.lines
+    .filter((l) => l.id !== line.id && codes.some((c) => sameClassCode(l.class_code, c)))
+    .map((l) => per100(l.rate, l.rate_basis))
+    .filter((r): r is number => r != null);
+  if (billed == null || !recorded.length) return null;
+  const summaryRate = Math.max(...recorded);
+  if (!(billed > summaryRate)) return null;
   const total = sum(coded.map(rowTotal));
+  const exposure = line.audited_amount;
   return {
     rule: "class_code_mismatch",
-    ourAmount: line.audited_amount,
-    exposure: line.audited_amount,
+    ourAmount: exposure,
+    exposure,
     partial: false,
-    reason: `The audit puts ${line.entity_name} in class ${
-      line.class_code
-    }. The payroll summary carries that payroll under class ${codes.join(
+    premium: exposure != null ? round2((exposure * (billed - summaryRate)) / 100) : null,
+    reason: `The audit puts ${line.entity_name} in class ${line.class_code} at ${rateText(
+      billed,
+    )}. The payroll summary carries that payroll under class ${codes.join(
       ", ",
-    )}. Same payroll, different code.`,
+    )}, which the same bill rates at ${rateText(summaryRate)}. Same payroll, a more expensive code.`,
     proof: {
       file: files.summary,
       detail: `Payroll summary rows for ${names(coded)}: class code ${codes.join(", ")}${
         total > 0 ? `, ${money(total)}` : ""
-      }.`,
+      }. Both rates are printed on the audit bill.`,
     },
   };
 }
@@ -440,19 +504,39 @@ function payReason(line: BillLine, { bill, rows, certs }: Ctx): string {
     if (!certs.length) {
       return `No certificate in the upload for ${line.entity_name}. Payment to a sub without a certificate is counted as payroll.`;
     }
+    if (bill.policy_type === "unknown") {
+      return `${line.entity_name} has a certificate in the upload, but the bill does not say whether it is a workers comp or a general liability audit, so the certificate could not be applied.`;
+    }
     if (!bill.audit_period_start || !bill.audit_period_end) {
       return `${line.entity_name} has a certificate in the upload, but the audit period could not be read from the bill, so the dates could not be checked.`;
     }
     const required = bill.required_gl_each_occurrence;
     if (
+      bill.policy_type !== "workers_comp" &&
       required != null &&
-      certs.some((c) => c.gl_each_occurrence != null && c.gl_each_occurrence < required)
+      certs.some(
+        (c) => hasGl(c) && (c.gl_each_occurrence == null || c.gl_each_occurrence < required),
+      )
     ) {
-      return `${line.entity_name} has a general liability certificate in the upload, but its limits are below what the audit requires.`;
+      return `${line.entity_name} has a general liability certificate in the upload, but its limits are below what the audit requires, or could not be read.`;
     }
-    return `${line.entity_name} has a certificate in the upload, but it does not cover the audit period (${fmtDate(
-      bill.audit_period_start,
-    )} to ${fmtDate(bill.audit_period_end)}), or its dates could not be read.`;
+    if (bill.policy_type === "both") {
+      return `This is a combined audit. The certificate in the upload for ${line.entity_name} does not show both workers comp and general liability in force for the audit period (${period(
+        bill,
+      )}), so the line stands.`;
+    }
+    return `${line.entity_name} has a certificate in the upload, but it does not cover the audit period (${period(
+      bill,
+    )}), or its dates could not be read.`;
+  }
+  if (line.entity_name && line.class_code) {
+    const coded = rows.filter((r) => r.class_code);
+    if (coded.length && !coded.some((r) => sameClassCode(r.class_code, line.class_code))) {
+      const codes = uniq(coded.map((r) => r.class_code as string));
+      return `The summary carries ${line.entity_name} under class ${codes.join(", ")}, not ${
+        line.class_code
+      }. The bill does not show that ${line.class_code} costs more, so the line stands as billed.`;
+    }
   }
   if (rows.length && audited != null) {
     const recorded = sum(rows.map(rowTotal));

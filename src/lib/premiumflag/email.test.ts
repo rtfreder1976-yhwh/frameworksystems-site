@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { composeEmail } from "./email.ts";
 import { evaluate } from "./rules.ts";
 import type { Analysis } from "./types.ts";
-import { FILES, align, bill, cert, line, row, summary } from "./rules.test.ts";
+import { FILES, align, bill, cert, line, row, summary } from "./test-fixtures.ts";
 
 function scenario(): Analysis {
   const b = bill({

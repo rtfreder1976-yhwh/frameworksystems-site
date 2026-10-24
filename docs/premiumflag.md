@@ -31,28 +31,36 @@ filled in. `/shipping`, `/cleaning`, `/platform` and their Stripe and mail links
 
 Code cannot do these. Each one is a setting in Vercel or Stripe.
 
-1. **Anthropic key.** In Vercel, project `frameworksystems-site`, add the environment variable
+1. **Cap the spend before the key goes in.** The upload has no login, by design, so anyone who
+   finds `/premium` can make it read files on your Anthropic bill. Set a monthly spend limit on
+   the Anthropic workspace the key belongs to, and add a Vercel Firewall rate-limit rule on `POST`
+   requests whose path starts with `/_serverFn/` (a real contractor sends one bill at a time, so a
+   handful of requests per minute per IP is plenty).
+2. **Anthropic key.** In Vercel, project `frameworksystems-site`, add the environment variable
    `ANTHROPIC_API_KEY` (Production and Preview). The reader uses Claude Opus 5.5 for the three
    document reads and the match step. Without the key the page says PremiumFlag is not switched
-   on yet.
-2. **Signing secret.** Add `PREMIUMFLAG_SIGNING_SECRET`: any long random string (for example the
+   on yet. A read can take a minute or two; keep the project on Vercel's Fluid compute default,
+   which lets a function run up to 300 seconds. The build does not set a shorter limit.
+3. **Signing secret.** Add `PREMIUMFLAG_SIGNING_SECRET`: any long random string (for example the
    output of `openssl rand -hex 32`). The analysis lives in the contractor's browser between
    "read the bill" and "pay"; this signs it so a paid session unlocks the email for the bill it
    was bought for and nothing else. Without it, each server instance uses its own temporary key
    and unlocks fail after a cold start.
-3. **Stripe price and Payment Link.** In Stripe, create a one-time price of **$249.00** named
+4. **Stripe price and Payment Link.** In Stripe, create a one-time price of **$249.00** named
    PremiumFlag, statement descriptor FRAMEWORK SYSTEMS, and a Payment Link for it. On the Payment
    Link, under "After payment", choose **"Don't show confirmation page"** and set the redirect to
    `https://frameworksystems.co/premium?session_id={CHECKOUT_SESSION_ID}` (use the
    `frameworksystems-site.vercel.app` host until the domain moves). The `{CHECKOUT_SESSION_ID}`
    text is literal; Stripe fills it in. The page appends `client_reference_id` to the link
-   itself, so do not add it in Stripe.
-4. **Stripe key.** Add `STRIPE_SECRET_KEY` in Vercel. A restricted key with only
+   itself, so do not add it in Stripe. Leave promotion codes off: the unlock requires at least
+   $249.00 in USD, so a discounted checkout would not unlock the email.
+5. **Stripe key.** Add `STRIPE_SECRET_KEY` in Vercel. A restricted key with only
    **Checkout Sessions: Read** is enough and is the safer choice. The server uses it for one
    call: confirm the session is paid and belongs to this bill.
-5. **Paste the link.** Put the Payment Link URL into `PREMIUMFLAG_STRIPE_URL` in
+6. **Paste the link.** Put the Payment Link URL into `PREMIUMFLAG_STRIPE_URL` in
    `src/lib/site.ts` and deploy. That one edit turns on the Unlock button and removes `noindex`.
-6. **Test with a real card** on one flagged bill. Then do step 6 below.
+7. **Test with a real card** on one flagged bill. Then add the homepage door, as described in
+   "Step 6: the homepage door" below.
 
 Environment variables, all server-side, none `VITE_`:
 
@@ -125,13 +133,18 @@ line only through these six rules. Each flag names the proof: which uploaded fil
 
 | Rule | Flags when | Our figure |
 | --- | --- | --- |
-| `sub_has_wc_cert` | A sub was billed as payroll or cost, and a certificate in the upload shows workers comp in force for that sub across the audit period | $0 (full coverage) or "remove the payments dated inside the certificate period" (partial coverage, no premium figure) |
-| `sub_has_gl_cert` | On a GL audit (or a combined one), sub cost was counted and a certificate covers that sub for general liability across the period, at the required limits when the bill states them | Same as above |
-| `overtime_premium_included` | The worksheet states overtime premium is in the base, or the audited payroll equals straight time plus full overtime on a summary that splits the premium portion | Audited payroll minus the premium portion. The straight-time part of overtime stays |
+| `sub_has_wc_cert` | On a workers comp audit, a sub was billed as payroll or cost, and a certificate in the upload shows workers comp in force for that sub across the audit period | $0 (full coverage) or "remove the payments dated inside the certificate period" (partial coverage, no premium figure) |
+| `sub_has_gl_cert` | On a GL audit, sub cost was counted and a certificate covers that sub for general liability across the period. When the bill states a required limit, the certificate has to show it; a limit that can't be read does not count | Same as above |
+| `overtime_premium_included` | The worksheet states overtime premium is in the base, or the audited payroll equals straight time plus full overtime on a summary that splits the premium portion, to within a margin that is always smaller than the premium itself | Audited payroll minus the premium portion. The straight-time part of overtime stays |
 | `owner_excluded` | A named owner or officer is counted while the summary marks them excluded | $0 |
 | `owner_over_cap` | A named owner or officer is counted above a cap the audit document itself states | The cap |
-| `class_code_mismatch` | A named person's payroll sits in a class code the summary does not carry for them | Same payroll under the summary's code (premium left to the carrier) |
+| `class_code_mismatch` | A named person's payroll sits in a class code the summary does not carry for them, and the same bill rates that code higher than the summary's code. A move into a cheaper code, or one the bill does not rate, stays Pay | Same payroll under the summary's code. The disputed premium is the rate difference on that payroll |
 | `total_contract_as_payroll` | The full contract amount was used when the records split labor and materials | The labor amount |
+
+Which certificate counts follows the policy the bill audits. A bill that does not say whether it
+is a workers comp or a general liability audit applies no certificate, and the result says so. A
+combined audit flags a sub only when the certificate shows both workers comp and general
+liability in force for the period, because the line may sit under either policy.
 
 What never flags: a bill that is bigger than last year's estimate (the true-up), a sub without a
 certificate in the upload, a difference the upload does not explain, cash labor that is not on the
@@ -169,8 +182,10 @@ How the unlock works, end to end:
 2. "Unlock the email" opens the Payment Link with `?client_reference_id=<analysis id>`.
 3. Stripe sends the buyer back to `/premium?session_id=cs_...`.
 4. The page sends the session id and the stored analysis to the server. The server checks the
-   signature, asks Stripe for that session, requires `payment_status: paid` and a
-   `client_reference_id` equal to the analysis id, then composes the email and returns it.
+   signature, asks Stripe for that session, and requires `payment_status: paid`, a
+   `client_reference_id` equal to the analysis id, and at least $249.00 in USD. The reference
+   can be added to any of our Payment Links, so the amount is what ties the payment to
+   PremiumFlag. Then it composes the email and returns it.
 5. The page shows the subject and body with a copy button.
 
 Until the Payment Link exists, the button reads "not live yet" and points people at
@@ -193,11 +208,14 @@ cannot be seen and will not be invented.
   adaptive thinking, server-side refusal fallback on), PDF passed as a document block, CSV as a
   text document. A second small read links bill lines to summary rows and certificates by name,
   merged with a conservative deterministic match (`match.ts`). The reader never judges.
+- Labels the reader fills in (document type, policy type, line category, basis, rate basis) are
+  normalized and fall back to the value no rule fires on. The installed SDK passes the allowed
+  values to the API only as a description, so an answer like "Workers Comp" must not fail a read.
 - `pdf-text.server.ts`: the PDF text layer (unpdf) for the pre-read screen and the page count.
 - `rules.ts`, `email.ts`, `screen.ts`, `match.ts`: pure code with tests
-  (`npm run test:premiumflag`).
+  (`npm run test:premiumflag`, which also covers the schemas and the unlock path).
 - `sign.server.ts`, `stripe.server.ts`, `unlock.server.ts`: HMAC over the analysis, one Stripe
-  read, the gate.
+  read, the gate. Tested end to end against a stubbed Stripe.
 - Files: 3 MB each, 60 pages (80 for certificates). Each document is sent in its own request, so
   nothing hits the 4.5 MB request limit on Vercel.
 - Not built, by instruction: accounts, a dashboard, carrier login, a payroll integration, a place

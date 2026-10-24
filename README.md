@@ -28,4 +28,4 @@ App URLs that stay where they are:
 
 ## Local
 
-`npm run dev` — port 8080. `npm run test:premiumflag` runs the PremiumFlag rules, screening, and email tests.
+`npm run dev` — port 8080. `npm run test:premiumflag` runs the PremiumFlag rules, screening, schema, email, and unlock tests.
